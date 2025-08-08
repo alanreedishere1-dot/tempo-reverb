@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="manifest" href="manifest.webmanifest">
+<title>Tempo Reverb Helper</title>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;margin:20px;line-height:1.35;background:#fff;color:#111}
+  label{display:block;margin:.6rem 0 .2rem}
+  .card{border:1px solid #ccc;border-radius:10px;padding:14px;margin-top:14px}
+  .num{font-variant-numeric:tabular-nums}
+  .muted{color:#666}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .small{font-size:.9rem}
+  .hint{font-size:.85rem;color:#444}
+  h2,h3,h4{margin:.4rem 0}
+  @media (prefers-color-scheme: dark){
+    body{background:#0e0e0e;color:#eee}
+    .card{border-color:#333}
+    .muted{color:#aaa}
+  }
+</style>
+</head>
+<body>
+<h2>Tempo‑aware Reverb Helper</h2>
+
+<div class="grid">
+  <div>
+    <label for="bpm">BPM</label>
+    <input id="bpm" type="number" value="120" min="20" max="300" />
+  </div>
+  <div>
+    <label for="feel">Feel</label>
+    <select id="feel">
+      <option value="straight" selected>Straight</option>
+      <option value="dotted">Dotted (×1.5)</option>
+      <option value="triplet">Triplet (×2/3)</option>
+    </select>
+  </div>
+  <div>
+    <label for="style">Style</label>
+    <select id="style">
+      <option value="ambience">Tight Ambience</option>
+      <option value="small">Small Room</option>
+      <option value="large">Large Room</option>
+      <option value="hall">Hall</option>
+      <option value="plate">Plate</option>
+    </select>
+  </div>
+  <div>
+    <label for="feelNudge">Pre‑delay feel</label>
+    <select id="feelNudge">
+      <option value="0">Neutral</option>
+      <option value="-0.15">Pull (−15%)</option>
+      <option value="0.15">Push (+15%)</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <div id="summary" class="muted small"></div>
+  <h3>Suggested settings</h3>
+  <div id="results"></div>
+  <p class="hint">Tip: HPF the reverb return (150–250 Hz), dip 300–600 Hz if muddy, optional high shelf for air.</p>
+</div>
+
+<script>
+function noteMsFromDenom(W, denom, feel){
+  let factor = 1;
+  if (feel === 'dotted') factor = 1.5;
+  if (feel === 'triplet') factor = 2/3;
+  return (W / denom) * factor;
+}
+const PRESETS = {
+  ambience: { name:'Tight Ambience', preDenoms:[128,64], rt60Bars:[0.25,0.5] },
+  small:    { name:'Small Room',     preDenoms:[64,32],  rt60Bars:[0.5] },
+  large:    { name:'Large Room',     preDenoms:[32,16],  rt60Bars:[0.75,1] },
+  hall:     { name:'Hall',           preDenoms:[32,16],  rt60Bars:[1,2] },
+  plate:    { name:'Plate',          preDenoms:[64,32],  rt60Bars:[0.75,1.5] }
+};
+function fmtMs(ms){ return `${ms.toFixed(2)} ms`; }
+function fmtBars(b){ return (b % 1 === 0) ? `${b} bar` + (b>1?'s':'') : `${b} bar`; }
+function calc(){
+  const bpm = Math.max(20, Math.min(300, Number(document.getElementById('bpm').value||120)));
+  const feel = document.getElementById('feel').value;
+  const styleKey = document.getElementById('style').value;
+  const nudge = Number(document.getElementById('feelNudge').value);
+  const Q = 60000 / bpm;      // quarter note ms
+  const W = Q * 4;            // whole note (1 bar in 4/4) ms
+  const barMs = W;
+  const preset = PRESETS[styleKey];
+  const preList = preset.preDenoms.map(d=>{
+    const base = noteMsFromDenom(W, d, feel);
+    const nudged = base * (1 + nudge);
+    return { label:`1/${d}`, baseMs:base, ms:nudged };
+  });
+  const rt60List = preset.rt60Bars.map(b=>({ label:`≈ ${fmtBars(b)}`, ms: b * barMs }));
+  const landList = rt60List.flatMap(rt=>{
+    return preList.map(pd=>{
+      const ms = Math.max(50, rt.ms - pd.ms);
+      return { target:rt.label, pre:pd.label, ms, note:`RT60 to land on ${rt.label} after ${pd.label} pre‑delay` };
+    });
+  });
+  document.getElementById('summary').textContent = `BPM ${bpm} • Feel: ${feel} • Style: ${preset.name}`;
+  let html = '';
+  html += `<h4>Pre‑delay options</h4><ul>`;
+  preList.forEach((p,i)=>{
+    const strong = (i===1) ? 'style="font-weight:600"' : '';
+    html += `<li ${strong}>${p.label} → <span class="num">${fmtMs(p.ms)}</span></li>`;
+  });
+  html += `</ul>`;
+  html += `<h4>RT60 (decay) targets</h4><ul>`;
+  rt60List.forEach(r=>{
+    html += `<li>${r.label} → <span class="num">${fmtMs(r.ms)}</span></li>`;
+  });
+  html += `</ul>`;
+  html += `<h4>“Land on grid” suggestions (RT60 = target − pre‑delay)</h4><ul>`;
+  landList.slice(0,6).forEach(item=>{
+    html += `<li>${item.note}: <span class="num">${fmtMs(item.ms)}</span></li>`;
+  });
+  html += `</ul>`;
+  const recPre = preList[Math.min(1, preList.length-1)];
+  const recRt = rt60List[0];
+  html += `<div class="card"><strong>Quick start:</strong> Set pre‑delay to ${recPre.label} (${fmtMs(recPre.ms)}), decay ≈ ${recRt.label} (${fmtMs(recRt.ms)}). Tweak by ear ±10%.</div>`;
+  document.getElementById('results').innerHTML = html;
+}
+document.querySelectorAll('input,select').forEach(el=>el.addEventListener('input', calc));
+calc();
+</script>
+<script>
+// Basic offline support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js'));
+}
+</script>
+</body>
+</html>
